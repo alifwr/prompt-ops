@@ -424,21 +424,32 @@ Write-Host "=== Installation complete! The daemon is running in the background. 
 
 		try {
 			let result: any;
-			if (action === 'logs') {
-				result = await executeToolOnDaemon(serverId, 'control_compose_project', JSON.stringify({
-					project_name: project.projectName, action: 'logs'
+
+			if (action === 'start') {
+				// deploy_compose writes the YAML to disk and runs `docker compose up -d`
+				result = await executeToolOnDaemon(serverId, 'deploy_compose', JSON.stringify({
+					project_name: project.projectName, compose_yaml: project.composeYaml
 				}));
-				if (result?.content?.[0]?.text) return { logs: result.content[0].text };
-				return { logs: '' };
-			} else if (['start', 'stop', 'restart'].includes(action)) {
+				await db.update(deployments).set({ status: 'running' }).where(eq(deployments.id, Number(projectId)));
+				await db.insert(auditLogs).values({ serverId, action: 'project_start', details: `start: ${project.projectName}` });
+				return { status: 'running', output: result?.content?.[0]?.text || 'Project started.' };
+
+			} else if (['stop', 'restart', 'logs'].includes(action)) {
+				// Pass compose_yaml so the daemon writes the file to disk before executing the action
 				result = await executeToolOnDaemon(serverId, 'control_compose_project', JSON.stringify({
-					project_name: project.projectName, action
+					project_name: project.projectName, action, compose_yaml: project.composeYaml
 				}));
-				// Update status in DB
+
+				if (action === 'logs') {
+					if (result?.content?.[0]?.text) return { logs: result.content[0].text };
+					return { logs: '' };
+				}
+
 				const newStatus = action === 'stop' ? 'stopped' : 'running';
 				await db.update(deployments).set({ status: newStatus }).where(eq(deployments.id, Number(projectId)));
 				await db.insert(auditLogs).values({ serverId, action: `project_${action}`, details: `${action}: ${project.projectName}` });
 				return { status: newStatus, output: result?.content?.[0]?.text || '' };
+
 			} else {
 				reply.status(400);
 				return { error: 'Invalid action. Must be: start, stop, restart, or logs' };

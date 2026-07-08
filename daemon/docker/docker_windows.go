@@ -213,6 +213,24 @@ func BackupDatabase(containerID string, username string, dbName string) (string,
 	return backupPath, nil
 }
 
+// EnsureComposeFile writes the docker-compose.yml to disk without running docker compose up.
+// Used to ensure the file exists before running control actions (stop, restart, logs).
+func EnsureComposeFile(projectName string, composeYaml string) error {
+	appDir := filepath.Join("./var/promptops", "apps", projectName)
+
+	if err := os.MkdirAll(appDir, 0700); err != nil {
+		return fmt.Errorf("failed to create app directory: %w", err)
+	}
+
+	composePath := filepath.Join(appDir, "docker-compose.yml")
+	if err := os.WriteFile(composePath, []byte(composeYaml), 0600); err != nil {
+		return fmt.Errorf("failed to write docker-compose.yml: %w", err)
+	}
+
+	log.Printf("[Docker Windows] Compose file written for project %s at %s", projectName, composePath)
+	return nil
+}
+
 // ControlCompose controls a docker compose project (start, stop, restart, logs, down)
 func ControlCompose(projectName string, action string) (string, error) {
 	appDir := filepath.Join("./var/promptops", "apps", projectName)

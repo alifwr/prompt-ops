@@ -338,9 +338,20 @@ func handleToolCall(name string, args json.RawMessage) (interface{}, *RpcError) 
 		var params struct {
 			ProjectName string `json:"project_name"`
 			Action      string `json:"action"`
+			ComposeYaml string `json:"compose_yaml"`
 		}
 		if err := json.Unmarshal(args, &params); err != nil || params.ProjectName == "" || params.Action == "" {
 			return nil, &RpcError{Code: -32602, Message: "Invalid arguments"}
+		}
+
+		// If compose_yaml is provided, write it to disk first so the compose file exists
+		if params.ComposeYaml != "" {
+			if err := docker.EnsureComposeFile(params.ProjectName, params.ComposeYaml); err != nil {
+				return McpToolResponse{
+					Content: []McpTextContent{{Type: "text", Text: fmt.Sprintf("Failed to write compose file: %s", err.Error())}},
+					IsError: true,
+				}, nil
+			}
 		}
 
 		out, err := docker.ControlCompose(params.ProjectName, params.Action)
