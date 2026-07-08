@@ -377,13 +377,8 @@ Write-Host "=== Installation complete! The daemon is running in the background. 
 		const { project_name, compose_yaml } = request.body as { project_name: string; compose_yaml: string };
 		if (!project_name || !compose_yaml) { reply.status(400); return { error: 'project_name and compose_yaml are required' }; }
 
-		// Write compose file to daemon, then run docker compose up
-		const filePath = `/var/promptops/${project_name}/docker-compose.yml`;
 		try {
-			await executeToolOnDaemon(serverId, 'write_file', JSON.stringify({ path: filePath, content: compose_yaml }));
-			await executeToolOnDaemon(serverId, 'execute_command', JSON.stringify({
-				command: 'docker', args: ['compose', '-p', project_name, '-f', filePath, 'up', '-d', '--remove-orphans']
-			}));
+			await executeToolOnDaemon(serverId, 'deploy_compose', JSON.stringify({ project_name, compose_yaml }));
 		} catch (err: any) {
 			reply.status(503);
 			return { error: 'Failed to deploy on daemon: ' + err.message };
@@ -407,9 +402,8 @@ Write-Host "=== Installation complete! The daemon is running in the background. 
 
 		// Best-effort: bring down on daemon
 		try {
-			const filePath = `/var/promptops/${project.projectName}/docker-compose.yml`;
-			await executeToolOnDaemon(serverId, 'execute_command', JSON.stringify({
-				command: 'docker', args: ['compose', '-p', project.projectName, '-f', filePath, 'down']
+			await executeToolOnDaemon(serverId, 'control_compose_project', JSON.stringify({
+				project_name: project.projectName, action: 'down'
 			}));
 		} catch (_) { /* daemon may be offline; proceed with DB deletion anyway */ }
 
@@ -427,19 +421,18 @@ Write-Host "=== Installation complete! The daemon is running in the background. 
 		const existing = await db.select().from(deployments).where(eq(deployments.id, Number(projectId)));
 		if (existing.length === 0) { reply.status(404); return { error: 'Project not found' }; }
 		const project = existing[0];
-		const filePath = `/var/promptops/${project.projectName}/docker-compose.yml`;
 
 		try {
 			let result: any;
 			if (action === 'logs') {
-				result = await executeToolOnDaemon(serverId, 'execute_command', JSON.stringify({
-					command: 'docker', args: ['compose', '-p', project.projectName, '-f', filePath, 'logs', '--tail=100']
+				result = await executeToolOnDaemon(serverId, 'control_compose_project', JSON.stringify({
+					project_name: project.projectName, action: 'logs'
 				}));
 				if (result?.content?.[0]?.text) return { logs: result.content[0].text };
 				return { logs: '' };
 			} else if (['start', 'stop', 'restart'].includes(action)) {
-				result = await executeToolOnDaemon(serverId, 'execute_command', JSON.stringify({
-					command: 'docker', args: ['compose', '-p', project.projectName, '-f', filePath, action]
+				result = await executeToolOnDaemon(serverId, 'control_compose_project', JSON.stringify({
+					project_name: project.projectName, action
 				}));
 				// Update status in DB
 				const newStatus = action === 'stop' ? 'stopped' : 'running';

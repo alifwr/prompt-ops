@@ -162,3 +162,23 @@ func BackupDatabase(containerID string, username string, dbName string) (string,
 
 	return backupPath, nil
 }
+
+// ControlCompose controls a docker compose project (start, stop, restart, logs, down)
+func ControlCompose(projectName string, action string) (string, error) {
+	appDir := filepath.Join("/var/promptops", "apps", projectName)
+	composePath := filepath.Join(appDir, "docker-compose.yml")
+
+	var res *shell.CommandResult
+	if action == "logs" {
+		res = shell.RunCommand(15*time.Second, "docker", "compose", "-f", composePath, "-p", projectName, "logs", "--tail=100")
+	} else if action == "down" {
+		res = shell.RunCommand(30*time.Second, "docker", "compose", "-f", composePath, "-p", projectName, "down")
+	} else {
+		res = shell.RunCommand(30*time.Second, "docker", "compose", "-f", composePath, "-p", projectName, action)
+	}
+
+	if res.ExitCode != 0 {
+		return res.Stderr, fmt.Errorf("docker compose failed with exit code %d: %s", res.ExitCode, res.Error)
+	}
+	return res.Stdout, nil
+}

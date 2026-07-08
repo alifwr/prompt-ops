@@ -155,6 +155,25 @@ func GetAvailableTools() []McpTool {
 				"required": []string{"action"},
 			},
 		},
+		{
+			Name:        "control_compose_project",
+			Description: "Start, stop, restart, destroy, or view logs of a Docker Compose project by name.",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"project_name": map[string]interface{}{
+						"type":        "string",
+						"description": "The name of the docker compose project.",
+					},
+					"action": map[string]interface{}{
+						"type":        "string",
+						"enum":        []string{"start", "stop", "restart", "logs", "down"},
+						"description": "The action to run on the compose project.",
+					},
+				},
+				"required": []string{"project_name", "action"},
+			},
+		},
 	}
 }
 
@@ -312,6 +331,28 @@ func handleToolCall(name string, args json.RawMessage) (interface{}, *RpcError) 
 
 		return McpToolResponse{
 			Content: []McpTextContent{{Type: "text", Text: fmt.Sprintf("Database backup successfully written to: %s", backupFile)}},
+			IsError: false,
+		}, nil
+
+	case "control_compose_project":
+		var params struct {
+			ProjectName string `json:"project_name"`
+			Action      string `json:"action"`
+		}
+		if err := json.Unmarshal(args, &params); err != nil || params.ProjectName == "" || params.Action == "" {
+			return nil, &RpcError{Code: -32602, Message: "Invalid arguments"}
+		}
+
+		out, err := docker.ControlCompose(params.ProjectName, params.Action)
+		if err != nil {
+			return McpToolResponse{
+				Content: []McpTextContent{{Type: "text", Text: fmt.Sprintf("Action %s failed: %s (Output: %s)", params.Action, err.Error(), out)}},
+				IsError: true,
+			}, nil
+		}
+
+		return McpToolResponse{
+			Content: []McpTextContent{{Type: "text", Text: out}},
 			IsError: false,
 		}, nil
 
