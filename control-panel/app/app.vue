@@ -17,24 +17,38 @@
 
     <!-- Sidebar -->
     <aside class="sidebar">
-      <div class="sidebar-section-title">VPS Servers</div>
+      <div
+        class="nav-item"
+        :class="{ active: !selectedServer }"
+        @click="selectedServer = null; activeTab = 'monitor'"
+        title="Dashboard Overview"
+      >
+        🏠
+      </div>
+      <div class="sidebar-divider"></div>
+      
       <div
         v-for="server in servers"
         :key="server.id"
         class="server-item"
         :class="{ active: selectedServer?.id === server.id }"
         @click="selectServer(server)"
+        :title="server.name + ' - ' + server.ipAddress"
       >
         <span class="status-dot" :class="server.status"></span>
-        <div>
-          <div>{{ server.name }}</div>
-          <div style="font-size: 11px; color: var(--text-muted)">{{ server.ipAddress }}</div>
-        </div>
+        {{ server.name.substring(0, 2).toUpperCase() }}
       </div>
-      <button class="btn-add-vps" @click="openAddVpsModal">
-        <span style="font-size: 18px; line-height: 1;">+</span>
-        <span>Add VPS</span>
-      </button>
+      
+      <div class="sidebar-divider"></div>
+      
+      <div 
+        class="server-item" 
+        @click="openAddVpsModal" 
+        style="border: 1.5px dashed var(--border-glass); background: transparent; font-size: 20px; color: var(--text-muted);" 
+        title="Add VPS"
+      >
+        +
+      </div>
     </aside>
 
     <!-- Add VPS Modal Overlay -->
@@ -400,79 +414,87 @@
       </div>
     </Teleport>
 
-    <!-- AI Chat Panel -->
-    <aside class="chat-panel">
-      <div class="chat-header">
-        <div class="flex items-center gap-2">
-          <span class="ai-badge">AI</span>
-          <span class="chat-header-title">DevOps Assistant</span>
+    <!-- AI Chat Panel Drawer -->
+    <Teleport to="body">
+      <aside class="chat-drawer" :class="{ open: chatOpen }">
+        <div class="chat-header">
+          <div class="flex items-center gap-2">
+            <span class="ai-badge">AI</span>
+            <span class="chat-header-title">DevOps Assistant</span>
+          </div>
+          <div class="flex items-center gap-2" style="margin-left: auto;">
+            <label class="toggle-switch">
+              <input type="checkbox" v-model="alwaysApprove" @change="toggleAlwaysApprove" />
+              <span class="slider"></span>
+            </label>
+            <span style="font-size: 11px; color: var(--text-secondary);" title="Bypass approvals for non-destructive commands for 30 minutes">Always Approve</span>
+            <button class="btn btn-ghost btn-sm" @click="chatOpen = false" style="margin-left: 8px; font-size: 14px; padding: 2px 6px;">✕</button>
+          </div>
         </div>
-        <div class="flex items-center gap-2" style="margin-left: auto;">
-          <label class="toggle-switch">
-            <input type="checkbox" v-model="alwaysApprove" @change="toggleAlwaysApprove" />
-            <span class="slider"></span>
-          </label>
-          <span style="font-size: 11px; color: var(--text-secondary);" title="Bypass approvals for non-destructive commands for 30 minutes">Always Approve</span>
-        </div>
-      </div>
 
-      <div class="chat-messages" ref="chatContainer">
-        <div
-          v-for="(msg, i) in chatMessages"
-          :key="i"
-          class="chat-bubble"
-          :class="msg.role"
-        >
-          <div v-html="msg.content"></div>
+        <div class="chat-messages" ref="chatContainer">
+          <div
+            v-for="(msg, i) in chatMessages"
+            :key="i"
+            class="chat-bubble"
+            :class="msg.role"
+          >
+            <div v-html="msg.content"></div>
 
-          <!-- Approval Card -->
-          <div v-if="msg.approval" class="approval-card">
-            <div class="approval-card-title">⚠️ Manual Approval Required</div>
-            <div class="approval-tool-name">{{ msg.approval.tool_call.name }}</div>
-            <div class="approval-desc">{{ msg.approval.tool_call.description }}</div>
-            <div class="approval-actions">
-              <button
-                class="btn btn-success btn-sm"
-                @click="respondApproval(msg.approval.approval_id, true)"
-                :disabled="msg.approval.resolved"
-              >
-                ✓ Approve
-              </button>
-              <button
-                class="btn btn-danger btn-sm"
-                @click="respondApproval(msg.approval.approval_id, false)"
-                :disabled="msg.approval.resolved"
-              >
-                ✗ Reject
-              </button>
+            <!-- Approval Card -->
+            <div v-if="msg.approval" class="approval-card">
+              <div class="approval-card-title">⚠️ Manual Approval Required</div>
+              <div class="approval-tool-name">{{ msg.approval.tool_call.name }}</div>
+              <div class="approval-desc">{{ msg.approval.tool_call.description }}</div>
+              <div class="approval-actions">
+                <button
+                  class="btn btn-success btn-sm"
+                  @click="respondApproval(msg.approval.approval_id, true)"
+                  :disabled="msg.approval.resolved"
+                >
+                  ✓ Approve
+                </button>
+                <button
+                  class="btn btn-danger btn-sm"
+                  @click="respondApproval(msg.approval.approval_id, false)"
+                  :disabled="msg.approval.resolved"
+                >
+                  ✗ Reject
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <!-- Typing indicator -->
+          <div v-if="isThinking" class="chat-bubble ai">
+            <div style="display: flex; gap: 4px; padding: 4px 0;">
+              <span class="typing-dot"></span>
+              <span class="typing-dot" style="animation-delay: 0.15s"></span>
+              <span class="typing-dot" style="animation-delay: 0.3s"></span>
             </div>
           </div>
         </div>
 
-        <!-- Typing indicator -->
-        <div v-if="isThinking" class="chat-bubble ai">
-          <div style="display: flex; gap: 4px; padding: 4px 0;">
-            <span class="typing-dot"></span>
-            <span class="typing-dot" style="animation-delay: 0.15s"></span>
-            <span class="typing-dot" style="animation-delay: 0.3s"></span>
+        <div class="chat-input-area">
+          <div class="chat-input-wrapper">
+            <input
+              v-model="chatInput"
+              class="chat-input"
+              placeholder="Ask AI to manage your server..."
+              @keydown.enter="sendChat"
+            />
+            <button class="btn btn-primary btn-sm" @click="sendChat" :disabled="!chatInput.trim() || isThinking">
+              Send
+            </button>
           </div>
         </div>
-      </div>
+      </aside>
 
-      <div class="chat-input-area">
-        <div class="chat-input-wrapper">
-          <input
-            v-model="chatInput"
-            class="chat-input"
-            placeholder="Ask AI to manage your server..."
-            @keydown.enter="sendChat"
-          />
-          <button class="btn btn-primary btn-sm" @click="sendChat" :disabled="!chatInput.trim() || isThinking">
-            Send
-          </button>
-        </div>
-      </div>
-    </aside>
+      <!-- Floating Action Button for AI -->
+      <button class="ai-fab" :class="{ active: chatOpen }" @click="chatOpen = !chatOpen" title="Ask AI DevOps Assistant">
+        ✨
+      </button>
+    </Teleport>
 
     <!-- Terminal Toggle -->
     <button class="terminal-toggle" @click="toggleTerminal">
@@ -502,6 +524,7 @@ const config = useRuntimeConfig()
 const gatewayConnected = ref(false)
 const selectedServer = ref<any>(null)
 const terminalOpen = ref(false)
+const chatOpen = ref(false)
 const chatInput = ref('')
 const isThinking = ref(false)
 const alwaysApprove = ref(false)
