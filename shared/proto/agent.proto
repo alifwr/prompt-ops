@@ -1,0 +1,25 @@
+syntax = "proto3";
+
+package agent;
+
+service AgentService {
+  rpc Chat (ChatRequest) returns (ChatResponse);
+}
+
+message ChatRequest {
+  string message = 1;
+  string session_id = 2;
+  int32 server_id = 3;
+}
+
+message ChatResponse {
+  string response_text = 1;
+  bool is_approval_required = 2;
+  repeated ToolCall proposed_tool_calls = 3;
+}
+
+message ToolCall {
+  string name = 1;
+  string arguments_json = 2; // JSON-encoded arguments for the tool call
+  string description = 3;   // Human-readable explanation of what this tool call will do
+}

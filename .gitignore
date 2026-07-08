@@ -1,0 +1,68 @@
+# Dependency directories
+node_modules/
+jspm_packages/
+web_modules/
+/promptops-daemon.exe
+
+# Local env files
+.env
+.env.production
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# Build outputs and caches
+dist/
+.output/
+.nuxt/
+.cache/
+.parcel-cache/
+.eslintcache/
+.stylelintcache/
+.next/
+out/
+build/
+bin/
+obj/
+
+# Python virtualenvs and caches
+.venv/
+venv/
+ENV/
+env/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+
+# SQLite databases and journal files
+*.db
+*.db-journal
+*.sqlite3
+
+# Daemon binaries and workspace files
+daemon/promptops-daemon-linux
+daemon/promptops-daemon-windows.exe
+daemon/promptops-daemon.exe
+gateway/public/daemon-windows.exe
+var/
+apps/
+backups/
+stdout.log
+stderr.log
+C:/Users/ACER/promptops/
+
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# OS metadata
+.DS_Store
+Thumbs.db

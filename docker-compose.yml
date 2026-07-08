@@ -1,0 +1,62 @@
+version: '3.8'
+
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: promptops-db
+    restart: always
+    environment:
+      POSTGRES_DB: promptops
+      POSTGRES_USER: promptops_user
+      POSTGRES_PASSWORD: promptops_password
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+
+  ai-service:
+    build:
+      context: .
+      dockerfile: ./ai-service/Dockerfile
+    container_name: promptops-ai-service
+    restart: always
+    environment:
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - PORT=50051
+    ports:
+      - "50051:50051"
+
+  gateway:
+    build:
+      context: .
+      dockerfile: ./gateway/Dockerfile
+    container_name: promptops-gateway
+    restart: always
+    depends_on:
+      - db
+      - ai-service
+    environment:
+      - DATABASE_URL=postgresql://promptops_user:promptops_password@db:5432/promptops
+      - AI_SERVICE_URL=ai-service:50051
+      - PORT=3001
+      - HOST=0.0.0.0
+    ports:
+      - "3001:3001"
+
+  control-panel:
+    build:
+      context: ./control-panel
+      dockerfile: Dockerfile
+    container_name: promptops-control-panel
+    restart: always
+    depends_on:
+      - gateway
+    environment:
+      # NUXT_PUBLIC_GATEWAY_URL and WS_URL must point to the IP/domain reachable by the user's browser.
+      - NUXT_PUBLIC_GATEWAY_URL=${PUBLIC_GATEWAY_URL:-http://localhost:3001}
+      - NUXT_PUBLIC_WS_URL=${PUBLIC_WS_URL:-ws://localhost:3001}
+    ports:
+      - "3000:3000"
+
+volumes:
+  postgres_data:
