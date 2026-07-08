@@ -649,6 +649,149 @@ const handleResize = () => {
     fitAddon.fit()
   }
 }
+// ── Projects Manual Management ──
+const activeTab = ref<'monitor' | 'projects'>('monitor')
+
+interface Project {
+  id: number
+  serverId: number
+  projectName: string
+  composeYaml: string
+  status: string
+  createdAt: string
+}
+
+const projects = ref<Project[]>([])
+const projectsLoading = ref(false)
+const projectsError = ref('')
+
+// New project modal
+const showNewProjectModal = ref(false)
+const newProjectName = ref('')
+const newProjectYaml = ref(`services:
+  app:
+    image: nginx:latest
+    ports:
+      - "80:80"
+    restart: unless-stopped
+`)
+const deployingProject = ref(false)
+
+// Logs drawer
+const showLogsDrawer = ref(false)
+const logsProject = ref<Project | null>(null)
+const logsContent = ref('')
+const logsLoading = ref(false)
+
+// Action loading states
+const projectActionLoading = ref<Record<number, string>>({})
+
+const fetchProjects = async (serverId: number) => {
+  projectsLoading.value = true
+  projectsError.value = ''
+  try {
+    const res = await fetch(`${gatewayUrl}/api/servers/${serverId}/projects`)
+    if (!res.ok) throw new Error(`Gateway returned ${res.status}`)
+    const data = await res.json()
+    projects.value = Array.isArray(data) ? data : []
+  } catch (err: any) {
+    projectsError.value = err.message
+    projects.value = []
+  } finally {
+    projectsLoading.value = false
+  }
+}
+
+const deployNewProject = async () => {
+  if (!selectedServerId.value || !newProjectName.value.trim() || !newProjectYaml.value.trim()) return
+  deployingProject.value = true
+  try {
+    const res = await fetch(`${gatewayUrl}/api/servers/${selectedServerId.value}/projects`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ project_name: newProjectName.value.trim(), compose_yaml: newProjectYaml.value })
+    })
+    const data = await res.json()
+    if (!res.ok) throw new Error(data.error || 'Deploy failed')
+    projects.value.unshift(data)
+    addNotification(`✅ Deployed: ${newProjectName.value}`)
+    showNewProjectModal.value = false
+    newProjectName.value = ''
+    newProjectYaml.value = `services:\n  app:\n    image: nginx:latest\n    ports:\n      - "80:80"\n    restart: unless-stopped\n`
+  } catch (err: any) {
+    addNotification(`❌ Deploy failed: ${err.message}`)
+  } finally {
+    deployingProject.value = false
+  }
+}
+
+const triggerProjectAction = async (project: Project, action: 'start' | 'stop' | 'restart' | 'logs') => {
+  if (!selectedServerId.value) return
+  if (action === 'logs') {
+    logsProject.value = project
+    logsContent.value = ''
+    showLogsDrawer.value = true
+    logsLoading.value = true
+    try {
+      const res = await fetch(`${gatewayUrl}/api/servers/${selectedServerId.value}/projects/${project.id}/action`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'logs' })
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || 'Failed to get logs')
+      logsContent.value = data.logs || '(no output)'
+    } catch (err: any) {
+      logsContent.value = `Error: ${err.message}`
+    } finally {
+      logsLoading.value = false
+    }
+    return
+  }
+
+  projectActionLoading.value[project.id] = action
+  try {
+    const res = await fetch(`${gatewayUrl}/api/servers/${selectedServerId.value}/projects/${project.id}/action`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action })
+    })
+    const data = await res.json()
+    if (!res.ok) throw new Error(data.error || 'Action failed')
+    // Update local status
+    const idx = projects.value.findIndex(p => p.id === project.id)
+    if (idx !== -1) projects.value[idx].status = data.status || projects.value[idx].status
+    addNotification(`✅ ${action.charAt(0).toUpperCase() + action.slice(1)}: ${project.projectName}`)
+  } catch (err: any) {
+    addNotification(`❌ ${action} failed: ${err.message}`)
+  } finally {
+    delete projectActionLoading.value[project.id]
+  }
+}
+
+const deleteProject = async (project: Project) => {
+  if (!selectedServerId.value) return
+  if (!confirm(`Delete project "${project.projectName}"? This will also run docker compose down on the server.`)) return
+  projectActionLoading.value[project.id] = 'delete'
+  try {
+    const res = await fetch(`${gatewayUrl}/api/servers/${selectedServerId.value}/projects/${project.id}`, {
+      method: 'DELETE'
+    })
+    if (!res.ok) { const d = await res.json(); throw new Error(d.error || 'Delete failed') }
+    projects.value = projects.value.filter(p => p.id !== project.id)
+    addNotification(`🗑 Deleted: ${project.projectName}`)
+  } catch (err: any) {
+    addNotification(`❌ Delete failed: ${err.message}`)
+  } finally {
+    delete projectActionLoading.value[project.id]
+  }
+}
+
+// Switch to projects tab and auto-load
+const switchToProjects = () => {
+  activeTab.value = 'projects'
+  if (selectedServerId.value) fetchProjects(selectedServerId.value)
+}
 </script>
 
 <template>
@@ -825,6 +968,41 @@ const handleResize = () => {
       <!-- Column 2: Central Workspace (Resource monitor, docker panel, terminal drawer) -->
       <section class="flex-1 flex flex-col gap-4 overflow-hidden">
         
+        <!-- Tab Navigation Bar -->
+        <div class="glass rounded-2xl px-4 h-12 flex items-center gap-1 flex-shrink-0 border border-slate-200 dark:border-slate-800">
+          <button
+            @click="activeTab = 'monitor'"
+            :class="[
+              activeTab === 'monitor'
+                ? 'bg-indigo-600 text-white shadow-md shadow-indigo-500/20'
+                : 'text-slate-500 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-900',
+              'flex items-center gap-2 px-4 py-1.5 rounded-lg font-mono text-xs font-bold transition-all duration-200 cursor-pointer'
+            ]"
+          >
+            <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 002 2h2a2 2 0 002-2z" />
+            </svg>
+            MONITOR
+          </button>
+          <button
+            @click="switchToProjects"
+            :class="[
+              activeTab === 'projects'
+                ? 'bg-indigo-600 text-white shadow-md shadow-indigo-500/20'
+                : 'text-slate-500 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-900',
+              'flex items-center gap-2 px-4 py-1.5 rounded-lg font-mono text-xs font-bold transition-all duration-200 cursor-pointer'
+            ]"
+          >
+            <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zM14 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zM14 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z" />
+            </svg>
+            PROJECTS
+            <span v-if="projects.length > 0" class="bg-indigo-400/30 text-indigo-200 text-[9px] px-1.5 py-0.5 rounded-full font-bold">{{ projects.length }}</span>
+          </button>
+        </div>
+
+        <!-- ── TAB: MONITOR ── -->
+        <template v-if="activeTab === 'monitor'">
         <!-- Top Half: Resource Monitor & Docker Panel -->
         <div class="flex-1 grid grid-rows-2 gap-4 min-h-0 overflow-y-auto pr-1">
           
@@ -1051,6 +1229,97 @@ const handleResize = () => {
           </div>
         </div>
 
+        </template><!-- end monitor tab -->
+
+        <!-- ── TAB: PROJECTS ── -->
+        <template v-if="activeTab === 'projects'">
+          <div class="flex-1 flex flex-col gap-4 min-h-0 overflow-y-auto pr-1">
+
+            <!-- Projects Header -->
+            <div class="glass rounded-2xl p-4 flex-shrink-0">
+              <div class="flex items-center justify-between">
+                <div>
+                  <h3 class="font-outfit text-sm font-bold tracking-wider text-slate-700 dark:text-slate-300 uppercase flex items-center gap-2">
+                    <svg class="w-4 h-4 text-indigo-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zM14 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zM14 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z" />
+                    </svg>
+                    DOCKER COMPOSE PROJECTS
+                  </h3>
+                  <p class="font-mono text-[11px] text-slate-500 dark:text-slate-400 mt-1">Manage on <b class="text-indigo-400">{{ selectedServer || 'no server' }}</b> — no AI needed</p>
+                </div>
+                <div class="flex items-center gap-2">
+                  <button @click="selectedServerId && fetchProjects(selectedServerId)" :disabled="!selectedServerId || projectsLoading" class="font-mono text-xs text-slate-500 dark:text-slate-400 hover:text-indigo-500 flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-200 dark:border-slate-800 hover:border-indigo-500/50 transition-all disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer">
+                    <svg v-if="projectsLoading" class="w-3 h-3 animate-spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"/></svg>
+                    <svg v-else class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 1121.21 8H17"/></svg>
+                    Refresh
+                  </button>
+                  <button @click="showNewProjectModal = true" :disabled="!selectedServerId" class="flex items-center gap-2 px-4 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg font-mono text-xs font-bold shadow-md shadow-indigo-500/20 active:scale-95 transition-all disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer">
+                    <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M12 4v16m8-8H4"/></svg>
+                    New Project
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <!-- Error State -->
+            <div v-if="projectsError" class="flex items-center gap-2 text-xs font-mono text-rose-500 bg-rose-500/10 rounded-xl px-4 py-3 border border-rose-500/20">
+              <svg class="w-4 h-4 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/></svg>
+              {{ projectsError }}
+            </div>
+
+            <!-- Loading State -->
+            <div v-else-if="projectsLoading" class="flex-1 flex items-center justify-center">
+              <div class="flex flex-col items-center gap-3">
+                <svg class="w-8 h-8 animate-spin text-indigo-500" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"/></svg>
+                <span class="font-mono text-xs text-slate-500">Loading projects…</span>
+              </div>
+            </div>
+
+            <!-- Empty State -->
+            <div v-else-if="projects.length === 0" class="flex-1 flex items-center justify-center">
+              <div class="text-center">
+                <div class="w-16 h-16 rounded-2xl bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-center mx-auto mb-4">
+                  <svg class="w-8 h-8 text-indigo-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zM14 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zM14 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z" /></svg>
+                </div>
+                <p class="font-outfit font-semibold text-slate-600 dark:text-slate-300 mb-1">No projects yet</p>
+                <p class="font-mono text-xs text-slate-400 mb-4">{{ selectedServerId ? 'Deploy your first Docker Compose project.' : 'Select a server from the left panel first.' }}</p>
+                <button v-if="selectedServerId" @click="showNewProjectModal = true" class="px-5 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl font-mono text-xs font-bold shadow-md shadow-indigo-500/20 active:scale-95 transition-all cursor-pointer">
+                  + Deploy First Project
+                </button>
+              </div>
+            </div>
+
+            <!-- Project Cards Grid -->
+            <div v-else class="grid grid-cols-1 xl:grid-cols-2 gap-3">
+              <div v-for="project in projects" :key="project.id" class="glass rounded-xl p-4 border border-slate-200 dark:border-slate-800 hover:border-indigo-500/30 transition-all duration-200 flex flex-col gap-3">
+                <div class="flex items-start justify-between gap-2">
+                  <div class="flex items-center gap-3 min-w-0">
+                    <div :class="[project.status === 'running' ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-500' : 'bg-slate-200 dark:bg-slate-800 border-slate-300 dark:border-slate-700 text-slate-500', 'h-10 w-10 rounded-lg border flex items-center justify-center flex-shrink-0']">
+                      <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zM14 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zM14 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z" /></svg>
+                    </div>
+                    <div class="min-w-0">
+                      <div class="font-outfit font-bold text-sm text-slate-800 dark:text-slate-200 truncate">{{ project.projectName }}</div>
+                      <div class="font-mono text-[10px] text-slate-500">Deployed {{ new Date(project.createdAt).toLocaleDateString() }}</div>
+                    </div>
+                  </div>
+                  <span :class="[project.status === 'running' ? 'bg-emerald-500/10 text-emerald-500 border-emerald-500/20' : project.status === 'stopped' ? 'bg-amber-500/10 text-amber-500 border-amber-500/20' : 'bg-rose-500/10 text-rose-500 border-rose-500/20', 'font-mono text-[10px] font-bold px-2 py-0.5 rounded-full border flex-shrink-0 uppercase']">{{ project.status }}</span>
+                </div>
+                <div class="bg-slate-950 rounded-lg p-2.5 border border-slate-800 overflow-hidden">
+                  <pre class="font-mono text-[10px] text-slate-400 whitespace-pre-wrap leading-relaxed overflow-hidden" style="max-height:72px">{{ project.composeYaml }}</pre>
+                </div>
+                <div class="flex items-center gap-1.5 flex-wrap">
+                  <button @click="triggerProjectAction(project, 'start')" :disabled="project.status === 'running' || !!projectActionLoading[project.id]" class="flex items-center gap-1 px-2.5 py-1 rounded-lg font-mono text-[11px] font-bold text-emerald-600 dark:text-emerald-400 border border-emerald-500/30 hover:bg-emerald-500/10 active:scale-95 transition-all disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"><svg class="w-3 h-3" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>Start</button>
+                  <button @click="triggerProjectAction(project, 'stop')" :disabled="project.status === 'stopped' || !!projectActionLoading[project.id]" class="flex items-center gap-1 px-2.5 py-1 rounded-lg font-mono text-[11px] font-bold text-amber-600 dark:text-amber-400 border border-amber-500/30 hover:bg-amber-500/10 active:scale-95 transition-all disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"><svg class="w-3 h-3" fill="currentColor" viewBox="0 0 24 24"><path d="M6 6h12v12H6z"/></svg>Stop</button>
+                  <button @click="triggerProjectAction(project, 'restart')" :disabled="!!projectActionLoading[project.id]" class="flex items-center gap-1 px-2.5 py-1 rounded-lg font-mono text-[11px] font-bold text-indigo-600 dark:text-indigo-400 border border-indigo-500/30 hover:bg-indigo-500/10 active:scale-95 transition-all disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"><svg class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M4 4v5h.582m15.356 2A8.001 8.001 0 1121.21 8H17"/></svg>Restart</button>
+                  <button @click="triggerProjectAction(project, 'logs')" :disabled="!!projectActionLoading[project.id]" class="flex items-center gap-1 px-2.5 py-1 rounded-lg font-mono text-[11px] font-bold text-slate-600 dark:text-slate-400 border border-slate-300 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 active:scale-95 transition-all cursor-pointer"><svg class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"/></svg>Logs</button>
+                  <svg v-if="projectActionLoading[project.id]" class="w-4 h-4 animate-spin text-indigo-400 ml-1" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"/></svg>
+                  <button @click="deleteProject(project)" :disabled="!!projectActionLoading[project.id]" class="ml-auto flex items-center gap-1 px-2.5 py-1 rounded-lg font-mono text-[11px] font-bold text-rose-600 dark:text-rose-400 border border-rose-500/30 hover:bg-rose-500/10 active:scale-95 transition-all disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"><svg class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>Delete</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </template><!-- end projects tab -->
+
       </section>
 
       <!-- Column 3: Right Sidebar (AI Chat Drawer & Approvals Queue) -->
@@ -1200,6 +1469,77 @@ const handleResize = () => {
       </transition-group>
     </div>
 
+    <!-- ── Modal: New Project ── -->
+    <transition name="fade">
+      <div v-if="showNewProjectModal" class="fixed inset-0 z-50 flex items-center justify-center p-6" @click.self="showNewProjectModal = false">
+        <div class="absolute inset-0 bg-slate-950/70 backdrop-blur-sm"></div>
+        <div class="relative glass rounded-2xl border border-slate-700 w-full max-w-2xl flex flex-col overflow-hidden shadow-2xl shadow-indigo-500/10">
+          <div class="flex items-center justify-between px-6 py-4 border-b border-slate-800 flex-shrink-0">
+            <div>
+              <h2 class="font-outfit font-bold text-slate-200 flex items-center gap-2">
+                <svg class="w-5 h-5 text-indigo-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
+                Deploy New Project
+              </h2>
+              <p class="font-mono text-xs text-slate-500 mt-0.5">Deploying to <b class="text-indigo-400">{{ selectedServer }}</b> at <code class="text-slate-400">/var/promptops/</code></p>
+            </div>
+            <button @click="showNewProjectModal = false" class="text-slate-500 hover:text-white transition-colors cursor-pointer p-1">
+              <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+            </button>
+          </div>
+          <div class="p-6 flex flex-col gap-4">
+            <div>
+              <label class="font-mono text-xs text-slate-400 block mb-1.5">Project Name <span class="text-rose-400">*</span></label>
+              <input v-model="newProjectName" type="text" placeholder="my-app" class="w-full bg-slate-900 border border-slate-700 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500/30 rounded-xl px-4 py-2.5 text-sm text-slate-200 font-mono outline-none transition-all" />
+              <p class="font-mono text-[11px] text-slate-600 mt-1">Files written to: <code class="text-slate-400">/var/promptops/{{ newProjectName || 'my-app' }}/docker-compose.yml</code></p>
+            </div>
+            <div>
+              <label class="font-mono text-xs text-slate-400 block mb-1.5">docker-compose.yml <span class="text-rose-400">*</span></label>
+              <textarea v-model="newProjectYaml" rows="14" spellcheck="false" class="w-full bg-slate-950 border border-slate-700 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500/30 rounded-xl px-4 py-3 text-xs text-slate-300 font-mono outline-none transition-all resize-none leading-relaxed" placeholder="services:&#10;  app:&#10;    image: nginx:latest&#10;    ports:&#10;      - &quot;80:80&quot;"></textarea>
+            </div>
+          </div>
+          <div class="flex items-center justify-end gap-3 px-6 py-4 border-t border-slate-800 flex-shrink-0">
+            <button @click="showNewProjectModal = false" class="px-5 py-2 rounded-xl font-mono text-sm text-slate-400 hover:text-white border border-slate-700 hover:border-slate-600 transition-all cursor-pointer">Cancel</button>
+            <button @click="deployNewProject" :disabled="deployingProject || !newProjectName.trim() || !newProjectYaml.trim()" class="flex items-center gap-2 px-6 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl font-mono text-sm font-bold shadow-md shadow-indigo-500/20 active:scale-95 transition-all disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer">
+              <svg v-if="deployingProject" class="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"/></svg>
+              <svg v-else class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"/></svg>
+              {{ deployingProject ? 'Deploying…' : 'Deploy Project' }}
+            </button>
+          </div>
+        </div>
+      </div>
+    </transition>
+
+    <!-- ── Drawer: Project Logs ── -->
+    <transition name="slide-up">
+      <div v-if="showLogsDrawer" class="fixed inset-0 z-50 flex items-end justify-center" @click.self="showLogsDrawer = false">
+        <div class="absolute inset-0 bg-slate-950/60 backdrop-blur-sm"></div>
+        <div class="relative w-full max-w-5xl glass rounded-t-2xl border-t border-x border-slate-700 flex flex-col shadow-2xl shadow-black/40" style="max-height: 65vh">
+          <div class="flex items-center justify-between px-6 py-3 border-b border-slate-800 flex-shrink-0">
+            <div class="flex items-center gap-3">
+              <svg class="w-4 h-4 text-indigo-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"/></svg>
+              <span class="font-mono text-sm font-bold text-slate-200">Logs — <span class="text-indigo-400">{{ logsProject?.projectName }}</span></span>
+              <span class="font-mono text-[10px] text-slate-500">last 100 lines</span>
+            </div>
+            <div class="flex items-center gap-2">
+              <button @click="logsProject && triggerProjectAction(logsProject, 'logs')" :disabled="logsLoading" class="font-mono text-xs text-slate-400 hover:text-indigo-400 flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-700 hover:border-indigo-500/50 transition-all disabled:opacity-40 cursor-pointer">
+                <svg class="w-3 h-3" :class="logsLoading ? 'animate-spin' : ''" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 1121.21 8H17"/></svg>
+                Refresh
+              </button>
+              <button @click="showLogsDrawer = false" class="text-slate-500 hover:text-white cursor-pointer p-1">
+                <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+              </button>
+            </div>
+          </div>
+          <div class="flex-1 overflow-y-auto p-4 bg-slate-950/80">
+            <div v-if="logsLoading" class="flex items-center justify-center h-20">
+              <svg class="w-6 h-6 animate-spin text-indigo-400" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"/></svg>
+            </div>
+            <pre v-else class="font-mono text-xs text-slate-300 whitespace-pre-wrap leading-relaxed">{{ logsContent || '(no output)' }}</pre>
+          </div>
+        </div>
+      </div>
+    </transition>
+
   </div>
 </template>
 
@@ -1251,5 +1591,26 @@ const handleResize = () => {
 .list-leave-to {
   opacity: 0;
   transform: translateX(30px);
+}
+
+/* Modal fade transition */
+.fade-enter-active,
+.fade-leave-active {
+  transition: opacity 0.2s ease;
+}
+.fade-enter-from,
+.fade-leave-to {
+  opacity: 0;
+}
+
+/* Logs drawer slide-up transition */
+.slide-up-enter-active,
+.slide-up-leave-active {
+  transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.slide-up-enter-from,
+.slide-up-leave-to {
+  opacity: 0;
+  transform: translateY(40px);
 }
 </style>

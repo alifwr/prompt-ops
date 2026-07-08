@@ -7,7 +7,7 @@ import swagger from '@fastify/swagger';
 import swaggerUi from '@fastify/swagger-ui';
 import crypto from 'crypto';
 import { db, pool } from './db';
-import { servers, auditLogs } from './db/schema';
+import { servers, auditLogs, deployments } from './db/schema';
 import { eq } from 'drizzle-orm';
 import { WebSocket } from 'ws';
 import { sendAgentChat } from './grpc';
@@ -349,6 +349,110 @@ Write-Host "=== Installation complete! The daemon is running in the background. 
 		} catch (err: any) {
 			reply.status(503);
 			return { error: 'Daemon offline or unreachable', message: err.message };
+		}
+	});
+
+	// ── REST: Projects (Manual Management — no AI agent) ──
+
+	// List all projects for a server
+	fastify.get('/api/servers/:id/projects', async (request, reply) => {
+		const { id } = request.params as { id: string };
+		const serverId = Number(id);
+		const result = await db.select().from(deployments).where(eq(deployments.serverId, serverId));
+		return result;
+	});
+
+	// Get single project
+	fastify.get('/api/servers/:id/projects/:projectId', async (request, reply) => {
+		const { projectId } = request.params as { id: string; projectId: string };
+		const result = await db.select().from(deployments).where(eq(deployments.id, Number(projectId)));
+		if (result.length === 0) { reply.status(404); return { error: 'Project not found' }; }
+		return result[0];
+	});
+
+	// Create & deploy a new project
+	fastify.post('/api/servers/:id/projects', async (request, reply) => {
+		const { id } = request.params as { id: string };
+		const serverId = Number(id);
+		const { project_name, compose_yaml } = request.body as { project_name: string; compose_yaml: string };
+		if (!project_name || !compose_yaml) { reply.status(400); return { error: 'project_name and compose_yaml are required' }; }
+
+		// Write compose file to daemon, then run docker compose up
+		const filePath = `/var/promptops/${project_name}/docker-compose.yml`;
+		try {
+			await executeToolOnDaemon(serverId, 'write_file', JSON.stringify({ path: filePath, content: compose_yaml }));
+			await executeToolOnDaemon(serverId, 'execute_command', JSON.stringify({
+				command: 'docker', args: ['compose', '-p', project_name, '-f', filePath, 'up', '-d', '--remove-orphans']
+			}));
+		} catch (err: any) {
+			reply.status(503);
+			return { error: 'Failed to deploy on daemon: ' + err.message };
+		}
+
+		// Persist to database
+		const newDeployment = await db.insert(deployments).values({
+			serverId, projectName: project_name, composeYaml: compose_yaml, status: 'running',
+		}).returning();
+		await db.insert(auditLogs).values({ serverId, action: 'deploy', details: `Deployed project: ${project_name}` });
+		return newDeployment[0];
+	});
+
+	// Delete a project (optionally bring it down on the daemon)
+	fastify.delete('/api/servers/:id/projects/:projectId', async (request, reply) => {
+		const { id, projectId } = request.params as { id: string; projectId: string };
+		const serverId = Number(id);
+		const existing = await db.select().from(deployments).where(eq(deployments.id, Number(projectId)));
+		if (existing.length === 0) { reply.status(404); return { error: 'Project not found' }; }
+		const project = existing[0];
+
+		// Best-effort: bring down on daemon
+		try {
+			const filePath = `/var/promptops/${project.projectName}/docker-compose.yml`;
+			await executeToolOnDaemon(serverId, 'execute_command', JSON.stringify({
+				command: 'docker', args: ['compose', '-p', project.projectName, '-f', filePath, 'down']
+			}));
+		} catch (_) { /* daemon may be offline; proceed with DB deletion anyway */ }
+
+		await db.delete(deployments).where(eq(deployments.id, Number(projectId)));
+		await db.insert(auditLogs).values({ serverId, action: 'delete_project', details: `Deleted project: ${project.projectName}` });
+		return { status: 'deleted' };
+	});
+
+	// Project action: start | stop | restart | logs
+	fastify.post('/api/servers/:id/projects/:projectId/action', async (request, reply) => {
+		const { id, projectId } = request.params as { id: string; projectId: string };
+		const serverId = Number(id);
+		const { action } = request.body as { action: 'start' | 'stop' | 'restart' | 'logs' };
+
+		const existing = await db.select().from(deployments).where(eq(deployments.id, Number(projectId)));
+		if (existing.length === 0) { reply.status(404); return { error: 'Project not found' }; }
+		const project = existing[0];
+		const filePath = `/var/promptops/${project.projectName}/docker-compose.yml`;
+
+		try {
+			let result: any;
+			if (action === 'logs') {
+				result = await executeToolOnDaemon(serverId, 'execute_command', JSON.stringify({
+					command: 'docker', args: ['compose', '-p', project.projectName, '-f', filePath, 'logs', '--tail=100']
+				}));
+				if (result?.content?.[0]?.text) return { logs: result.content[0].text };
+				return { logs: '' };
+			} else if (['start', 'stop', 'restart'].includes(action)) {
+				result = await executeToolOnDaemon(serverId, 'execute_command', JSON.stringify({
+					command: 'docker', args: ['compose', '-p', project.projectName, '-f', filePath, action]
+				}));
+				// Update status in DB
+				const newStatus = action === 'stop' ? 'stopped' : 'running';
+				await db.update(deployments).set({ status: newStatus }).where(eq(deployments.id, Number(projectId)));
+				await db.insert(auditLogs).values({ serverId, action: `project_${action}`, details: `${action}: ${project.projectName}` });
+				return { status: newStatus, output: result?.content?.[0]?.text || '' };
+			} else {
+				reply.status(400);
+				return { error: 'Invalid action. Must be: start, stop, restart, or logs' };
+			}
+		} catch (err: any) {
+			reply.status(503);
+			return { error: 'Daemon offline or command failed: ' + err.message };
 		}
 	});
 
