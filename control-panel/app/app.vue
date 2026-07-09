@@ -19,11 +19,19 @@
     <aside class="sidebar">
       <div
         class="nav-item"
-        :class="{ active: !selectedServer }"
-        @click="selectedServer = null; activeTab = 'monitor'"
-        title="Dashboard Overview"
+        :class="{ active: activeTab === 'monitor' }"
+        @click="activeTab = 'monitor'"
+        title="Dashboard / Monitor"
       >
-        🏠
+        📊
+      </div>
+      <div
+        class="nav-item"
+        :class="{ active: activeTab === 'projects' }"
+        @click="switchToProjects"
+        title="Docker Projects"
+      >
+        🗂
       </div>
       <div class="sidebar-divider"></div>
       
@@ -156,19 +164,6 @@
     <!-- Main Workspace -->
     <main class="workspace">
 
-      <!-- Tab Bar -->
-      <div style="display:flex;gap:6px;margin-bottom:16px;background:var(--bg-card);border:1px solid var(--border-glass);border-radius:12px;padding:6px;flex-shrink:0;">
-        <button
-          @click="activeTab = 'monitor'"
-          :style="activeTab === 'monitor' ? 'background:var(--accent-primary);color:#fff;box-shadow:0 2px 8px rgba(99,102,241,0.3);' : 'background:transparent;color:var(--text-secondary);'"
-          style="flex:1;padding:7px 16px;border-radius:8px;font-family:var(--font-mono);font-size:12px;font-weight:700;border:none;cursor:pointer;transition:all .2s;display:flex;align-items:center;justify-content:center;gap:6px;"
-        >📊 MONITOR</button>
-        <button
-          @click="switchToProjects"
-          :style="activeTab === 'projects' ? 'background:var(--accent-primary);color:#fff;box-shadow:0 2px 8px rgba(99,102,241,0.3);' : 'background:transparent;color:var(--text-secondary);'"
-          style="flex:1;padding:7px 16px;border-radius:8px;font-family:var(--font-mono);font-size:12px;font-weight:700;border:none;cursor:pointer;transition:all .2s;display:flex;align-items:center;justify-content:center;gap:6px;"
-        >🗂 PROJECTS <span v-if="projects.length > 0" style="background:rgba(99,102,241,0.3);color:#a5b4fc;font-size:10px;padding:1px 6px;border-radius:99px;">{{ projects.length }}</span></button>
-      </div>
 
       <!-- ── TAB: MONITOR ── -->
       <template v-if="activeTab === 'monitor'">
