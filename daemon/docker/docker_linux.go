@@ -200,3 +200,41 @@ func ControlCompose(projectName string, action string) (string, error) {
 	}
 	return res.Stdout, nil
 }
+
+// ConfigureDomain sets up a domain with Caddy for the specified project.
+func ConfigureDomain(domain, email, projectName string) (string, error) {
+	caddyDir := "/var/promptops/caddy"
+	if err := os.MkdirAll(caddyDir, 0700); err != nil {
+		return "", fmt.Errorf("failed to create caddy config directory: %w", err)
+	}
+
+	// Basic configuration, assumes project container is exposed on a port or reachable on host network.
+	// For a complete implementation, this would join the project's docker network.
+	caddyfileContent := fmt.Sprintf(`
+%s {
+	tls %s
+	reverse_proxy localhost:8080
+}
+`, domain, email)
+
+	caddyfilePath := filepath.Join(caddyDir, "Caddyfile")
+	
+	f, err := os.OpenFile(caddyfilePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	if _, err := f.WriteString(caddyfileContent); err != nil {
+		return "", err
+	}
+
+	res := shell.RunCommand(30*time.Second, "docker", "run", "-d", "--name", "promptops-caddy", "--network", "host", "-v", "/var/promptops/caddy/Caddyfile:/etc/caddy/Caddyfile", "-v", "caddy_data:/data", "caddy:latest")
+	if res.ExitCode != 0 {
+		res = shell.RunCommand(15*time.Second, "docker", "exec", "promptops-caddy", "caddy", "reload", "--config", "/etc/caddy/Caddyfile")
+		if res.ExitCode != 0 {
+			return res.Stderr, fmt.Errorf("failed to reload caddy: %s", res.Stderr)
+		}
+	}
+	
+	return "Domain configured successfully with Caddy.", nil
+}

@@ -18,11 +18,15 @@
     "@fastify/websocket": "^11.2.0",
     "@grpc/grpc-js": "^1.14.4",
     "@grpc/proto-loader": "^0.8.1",
+    "bcryptjs": "^3.0.3",
     "drizzle-orm": "^0.45.2",
     "fastify": "^5.10.0",
+    "jsonwebtoken": "^9.0.3",
     "pg": "^8.22.0"
   },
   "devDependencies": {
+    "@types/bcryptjs": "^2.4.6",
+    "@types/jsonwebtoken": "^9.0.10",
     "@types/node": "^26.1.0",
     "@types/pg": "^8.20.0",
     "@types/ws": "^8.18.1",

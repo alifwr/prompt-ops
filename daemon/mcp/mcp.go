@@ -174,6 +174,28 @@ func GetAvailableTools() []McpTool {
 				"required": []string{"project_name", "action"},
 			},
 		},
+		{
+			Name:        "configure_domain",
+			Description: "Configure a domain with Let's Encrypt SSL using Caddy for a specific deployed project.",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"domain": map[string]interface{}{
+						"type":        "string",
+						"description": "The domain name to configure.",
+					},
+					"email": map[string]interface{}{
+						"type":        "string",
+						"description": "Admin email for Let's Encrypt registration.",
+					},
+					"project_name": map[string]interface{}{
+						"type":        "string",
+						"description": "The Docker compose project name to route traffic to.",
+					},
+				},
+				"required": []string{"domain", "email", "project_name"},
+			},
+		},
 	}
 }
 
@@ -364,6 +386,28 @@ func handleToolCall(name string, args json.RawMessage) (interface{}, *RpcError) 
 
 		return McpToolResponse{
 			Content: []McpTextContent{{Type: "text", Text: out}},
+			IsError: false,
+		}, nil
+
+	case "configure_domain":
+		var params struct {
+			Domain      string `json:"domain"`
+			Email       string `json:"email"`
+			ProjectName string `json:"project_name"`
+		}
+		if err := json.Unmarshal(args, &params); err != nil || params.Domain == "" || params.Email == "" || params.ProjectName == "" {
+			return nil, &RpcError{Code: -32602, Message: "Invalid arguments"}
+		}
+
+		out, err := docker.ConfigureDomain(params.Domain, params.Email, params.ProjectName)
+		if err != nil {
+			return McpToolResponse{
+				Content: []McpTextContent{{Type: "text", Text: fmt.Sprintf("Domain configuration failed: %s\nError: %s", out, err.Error())}},
+				IsError: true,
+			}, nil
+		}
+		return McpToolResponse{
+			Content: []McpTextContent{{Type: "text", Text: fmt.Sprintf("Domain %s successfully configured:\n%s", params.Domain, out)}},
 			IsError: false,
 		}, nil
 

@@ -12,6 +12,9 @@ import { eq } from 'drizzle-orm';
 import { WebSocket } from 'ws';
 import { sendAgentChat } from './grpc';
 import { execSync } from 'child_process';
+import jwt from 'jsonwebtoken';
+import bcrypt from 'bcryptjs';
+import { users } from './db/schema';
 
 const fastify = Fastify({ logger: true });
 
@@ -160,6 +163,53 @@ async function main() {
 	});
 	await fastify.register(swaggerUi, { routePrefix: '/documentation' });
 
+	const JWT_SECRET = process.env.JWT_SECRET || 'promptops-super-secret';
+
+	fastify.addHook('preHandler', async (request, reply) => {
+		const publicRoutes = ['/api/auth/login', '/api/auth/register', '/health', '/db-check', '/install.sh', '/install.ps1', '/download/daemon-linux', '/download/daemon-windows', '/api/approvals', '/api/session/settings', '/api/chat'];
+		if (publicRoutes.some(r => request.url.startsWith(r))) return;
+		if (request.method === 'OPTIONS') return;
+		if (request.url.startsWith('/api/')) {
+			const authHeader = request.headers.authorization;
+			console.log(`[Auth] Checking ${request.url} | Auth Header: ${authHeader ? 'PRESENT' : 'MISSING'} (${authHeader})`);
+			if (!authHeader || !authHeader.startsWith('Bearer ')) {
+				reply.status(401);
+				return reply.send({ error: 'Unauthorized' });
+			}
+			try {
+				const decoded = jwt.verify(authHeader.substring(7), JWT_SECRET);
+				(request as any).user = decoded;
+			} catch (err) {
+				console.log(`[Auth] Invalid token: ${err}`);
+				reply.status(401);
+				return reply.send({ error: 'Invalid token' });
+			}
+		}
+	});
+
+	// ── REST: Auth ──
+	fastify.post('/api/auth/register', async (request, reply) => {
+		const { email, password } = request.body as any;
+		if (!email || !password) { reply.status(400); return { error: 'Email and password required' }; }
+		const hash = bcrypt.hashSync(password, 10);
+		try {
+			await db.insert(users).values({ email, passwordHash: hash });
+			return { success: true };
+		} catch (e: any) {
+			reply.status(400); return { error: e.message };
+		}
+	});
+
+	fastify.post('/api/auth/login', async (request, reply) => {
+		const { email, password } = request.body as any;
+		const user = await db.select().from(users).where(eq(users.email, email)).limit(1);
+		if (user.length === 0 || !bcrypt.compareSync(password, user[0].passwordHash)) {
+			reply.status(401); return { error: 'Invalid credentials' };
+		}
+		const token = jwt.sign({ id: user[0].id, email: user[0].email }, JWT_SECRET, { expiresIn: '7d' });
+		return { token, user: { id: user[0].id, email: user[0].email } };
+	});
+
 	// ── REST: Health ──
 	fastify.get('/health', async () => ({ status: 'OK', timestamp: new Date().toISOString() }));
 
@@ -174,8 +224,8 @@ async function main() {
 	});
 
 	// ── REST: CRUD ──
-	fastify.get('/api/servers', async () => await db.select().from(servers));
-	fastify.get('/api/audit-logs', async () => await db.select().from(auditLogs));
+	fastify.get('/api/servers', async (request) => await db.select().from(servers).where(eq(servers.userId, (request as any).user.id)));
+	fastify.get('/api/audit-logs', async (request) => await db.select().from(auditLogs).where(eq(auditLogs.userId, (request as any).user.id)));
 
 	// ── REST: Generate Registration Token ──
 	fastify.post('/api/servers/generate-token', async (request, reply) => {
@@ -184,6 +234,15 @@ async function main() {
 		const serverName = name || `vps-${token.slice(0, 8)}`;
 		const gatewayHost = request.headers.host || '127.0.0.1:3001';
 		const protocol = request.protocol || 'http';
+
+		// Pre-register the server to tie it to the user
+		await db.insert(servers).values({
+			userId: (request as any).user.id,
+			name: serverName,
+			ipAddress: 'pending',
+			token,
+			status: 'registering'
+		});
 
 		// Build the one-liner installer commands for Linux and Windows
 		const linuxCommand = `curl -sSL "${protocol}://${gatewayHost}/install.sh?token=${token}&name=${encodeURIComponent(serverName)}" | bash`;
@@ -621,17 +680,13 @@ Write-Host "=== Installation complete! The daemon is running in the background. 
 						if (existing.length > 0) {
 							serverId = existing[0].id;
 							activeDaemons.set(serverId, ws);
-							await db.update(servers).set({ status: 'online', ipAddress: req.ip }).where(eq(servers.id, serverId));
+							await db.update(servers).set({ status: 'online', ipAddress: req.ip, name: payload.name }).where(eq(servers.id, serverId));
 							ws.send(JSON.stringify({ status: 'success', server_id: serverId }));
-							console.log(`[WS] Re-registered/Connected via registration token: ${payload.name} (ID: ${serverId})`);
+							console.log(`[WS] Registered/Connected via registration token: ${payload.name} (ID: ${serverId})`);
 						} else {
-							const newServer = await db.insert(servers).values({
-								name: payload.name, ipAddress: req.ip, token: registrationToken, status: 'online',
-							}).returning();
-							serverId = newServer[0].id;
-							activeDaemons.set(serverId, ws);
-							ws.send(JSON.stringify({ status: 'success', server_id: serverId }));
-							console.log(`[WS] Registered new server: ${payload.name} (ID: ${serverId})`);
+							ws.send(JSON.stringify({ status: 'error', message: 'Invalid registration token' }));
+							ws.close();
+							return;
 						}
 					} else if (token) {
 						const existing = await db.select().from(servers).where(eq(servers.token, token));
@@ -679,7 +734,24 @@ Write-Host "=== Installation complete! The daemon is running in the background. 
 	});
 
 	// ── WebSocket: Frontend Clients ──
-	fastify.get('/ws/client', { websocket: true }, (ws: any) => {
+	fastify.get('/ws/client', { websocket: true }, (ws: any, req: any) => {
+		const query = req.query as Record<string, string>;
+		const token = query.token;
+		let userId: number | null = null;
+		
+		if (token) {
+			try {
+				const decoded = jwt.verify(token, JWT_SECRET) as any;
+				userId = decoded.id;
+			} catch (err) {
+				ws.send(JSON.stringify({ type: 'stdout', data: '\r\n\x1b[31mError: Invalid or expired authentication token.\x1b[0m\r\n' }));
+				ws.close(); return;
+			}
+		} else {
+			ws.send(JSON.stringify({ type: 'stdout', data: '\r\n\x1b[31mError: Unauthorized WebSocket connection.\x1b[0m\r\n' }));
+			ws.close(); return;
+		}
+
 		let activeServerId: number | null = null;
 
 		ws.on('message', async (message: Buffer) => {

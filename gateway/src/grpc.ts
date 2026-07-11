@@ -17,7 +17,7 @@ const agentProto = protoDescriptor.agent;
 
 // Create gRPC client connecting to FastAPI AI Service on port 50051
 export const grpcClient = new agentProto.AgentService(
-	'127.0.0.1:50051',
+	process.env.AI_SERVICE_URL || 'ai-service:50051',
 	grpc.credentials.createInsecure()
 );
 

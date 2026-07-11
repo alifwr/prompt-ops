@@ -255,3 +255,32 @@ func ControlCompose(projectName string, action string) (string, error) {
 	}
 	return res.Stdout, nil
 }
+
+// ConfigureDomain sets up a domain with Caddy for the specified project.
+func ConfigureDomain(domain, email, projectName string) (string, error) {
+	// Mock implementation for Windows testing
+	caddyDir := filepath.Join(os.Getenv("USERPROFILE"), ".promptops", "caddy")
+	if err := os.MkdirAll(caddyDir, 0700); err != nil {
+		return "", fmt.Errorf("failed to create caddy config directory: %w", err)
+	}
+
+	caddyfileContent := fmt.Sprintf(`
+%s {
+	tls %s
+	reverse_proxy localhost:8080
+}
+`, domain, email)
+
+	caddyfilePath := filepath.Join(caddyDir, "Caddyfile")
+	
+	f, err := os.OpenFile(caddyfilePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	if _, err := f.WriteString(caddyfileContent); err != nil {
+		return "", err
+	}
+	
+	return "Domain configured successfully with Caddy (Mock Windows).", nil
+}

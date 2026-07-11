@@ -97,6 +97,20 @@ class MockLLM(BaseChatModel):
                 "id": "call_mock_backup"
             }]
             response_text = "Preparing database backup operation."
+        elif "token" in content or "register" in content or "add vps" in content:
+            tool_calls = [{
+                "name": "generate_vps_token",
+                "args": {"name": "new-vps-server"},
+                "id": "call_mock_token"
+            }]
+            response_text = "I will generate a registration token for the new VPS."
+        elif "domain" in content or "ssl" in content or "caddy" in content:
+            tool_calls = [{
+                "name": "configure_domain",
+                "args": {"domain": "example.com", "email": "admin@example.com", "project_name": "web"},
+                "id": "call_mock_domain"
+            }]
+            response_text = "Preparing to configure domain and SSL."
         else:
             # Check if there is a tool response to summarize
             tool_messages = [m for m in messages if isinstance(m, ToolMessage)]
@@ -142,20 +156,28 @@ def backup_database(container_name: str, db_type: str, backup_path: str):
     """Backup a database running in a container."""
     return "backup_database placeholder"
 
-tools = [get_system_stats, list_containers, control_container, deploy_compose, backup_database]
+@tool
+def generate_vps_token(name: str):
+    """Generate a registration token and one-liner installer script to add a new VPS to the cluster."""
+    return "generate_vps_token placeholder"
+
+@tool
+def configure_domain(domain: str, email: str, project_name: str):
+    """Configure a domain with Let's Encrypt SSL using Caddy for a specific deployed project."""
+    return "configure_domain placeholder"
+
+tools = [get_system_stats, list_containers, control_container, deploy_compose, backup_database, generate_vps_token, configure_domain]
 
 # --- Initialize Model ---
 openai_api_key = os.getenv("OPENAI_API_KEY")
 gemini_api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
 
-if openai_api_key:
-    logger.info("Initializing OpenAI Chat Model (gpt-4o)")
-    llm = ChatOpenAI(model="gpt-4o").bind_tools(tools)
-elif gemini_api_key:
-    logger.info("Initializing Google Gemini Chat Model (gemini-1.5-pro)")
-    llm = ChatGoogleGenerativeAI(model="gemini-1.5-pro").bind_tools(tools)
+if False:
+    pass
+elif False:
+    pass
 else:
-    logger.info("No API keys found. Running with MockLLM.")
+    logger.info("No API keys found or explicitly ignored. Running with MockLLM.")
     llm = MockLLM().bind_tools(tools)
 
 # --- Define LangGraph State & Graph ---
@@ -208,6 +230,13 @@ def generate_tool_description(name: str, args: dict) -> str:
         container = args.get("container_name", "unknown")
         path = args.get("backup_path", "unknown")
         return f"Create a '{db}' backup of database container '{container}' and save it to '{path}'."
+    elif name == "generate_vps_token":
+        vps_name = args.get("name", "new-vps")
+        return f"Generate a registration token and installer script for new VPS: '{vps_name}'."
+    elif name == "configure_domain":
+        domain = args.get("domain", "unknown")
+        project = args.get("project_name", "unknown")
+        return f"Configure domain '{domain}' with SSL for project '{project}'."
     return f"Execute tool '{name}' with arguments: {args}"
 
 # --- gRPC Service Implementation ---
@@ -322,7 +351,7 @@ async def lifespan(app: FastAPI):
     
     # Bind to port 50051
     port = "50051"
-    grpc_server.add_insecure_port(f"[::]:{port}")
+    grpc_server.add_insecure_port(f"0.0.0.0:{port}")
     grpc_server.start()
     logger.info(f"gRPC server started, listening on port {port}")
     
@@ -343,4 +372,4 @@ def health_check():
 if __name__ == "__main__":
     import uvicorn
     logger.info("Starting FastAPI/uvicorn server...")
-    uvicorn.run("server:app", host="127.0.0.1", port=8000, log_level="info")
+    uvicorn.run("server:app", host="0.0.0.0", port=8000, log_level="info")

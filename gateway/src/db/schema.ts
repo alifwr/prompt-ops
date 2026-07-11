@@ -9,6 +9,7 @@ export const users = pgTable('users', {
 
 export const servers = pgTable('servers', {
   id: serial('id').primaryKey(),
+  userId: integer('user_id').references(() => users.id).notNull(),
   name: text('name').notNull(),
   ipAddress: text('ip_address').notNull(),
   status: text('status').default('offline').notNull(), // online, offline, registering
