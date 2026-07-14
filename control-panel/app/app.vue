@@ -25,7 +25,8 @@
         @click="activeTab = 'monitor'"
         title="Dashboard / Monitor"
       >
-        📊
+        <span class="icon">📊</span>
+        <span>Dashboard</span>
       </div>
       <div
         class="nav-item"
@@ -33,20 +34,25 @@
         @click="switchToProjects"
         title="Docker Projects"
       >
-        🗂
+        <span class="icon">🗂</span>
+        <span>Projects</span>
       </div>
       <div class="sidebar-divider"></div>
       
+      <div style="font-size: 11px; font-weight: 700; color: var(--text-muted); text-transform: uppercase; padding: 0 12px; margin-top: 8px;">Your Servers</div>
       <div
         v-for="server in servers"
         :key="server.id"
         class="server-item"
         :class="{ active: selectedServer?.id === server.id }"
         @click="selectServer(server)"
-        :title="server.name + ' - ' + server.ipAddress"
+        :title="server.ipAddress"
       >
         <span class="status-dot" :class="server.status"></span>
-        {{ server.name.substring(0, 2).toUpperCase() }}
+        <div style="display: flex; flex-direction: column; gap: 2px;">
+          <span style="font-weight: 600; font-size: 13px; color: var(--text-primary); line-height: 1;">{{ server.name }}</span>
+          <span style="font-weight: 500; font-size: 10px; color: var(--text-muted); line-height: 1;">{{ server.ipAddress }}</span>
+        </div>
       </div>
       
       <div class="sidebar-divider"></div>
@@ -54,10 +60,10 @@
       <div 
         class="server-item" 
         @click="openAddVpsModal" 
-        style="border: 1.5px dashed var(--border-glass); background: transparent; font-size: 20px; color: var(--text-muted);" 
-        title="Add VPS"
+        style="border: 1.5px dashed var(--border-glass); background: transparent;" 
       >
-        +
+        <span style="font-size: 16px; color: var(--text-muted);">+</span>
+        <span style="color: var(--text-muted);">Add VPS</span>
       </div>
       <div class="sidebar-divider"></div>
       
@@ -65,9 +71,9 @@
         class="nav-item" 
         @click="handleLogout" 
         style="margin-top: auto; color: #ef4444;" 
-        title="Log Out"
       >
-        🚪
+        <span class="icon">🚪</span>
+        <span>Log Out</span>
       </div>
     </aside>
 
@@ -578,10 +584,18 @@ async function apiFetch<T = any>(url: string, options: any = {}): Promise<T> {
   }
 }
 
+const apiBaseUrl = import.meta.client && window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1'
+  ? `http://${window.location.hostname}:3001` 
+  : config.public.gatewayUrl
+
+const wsBaseUrl = import.meta.client && window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1'
+  ? `ws://${window.location.hostname}:3001` 
+  : config.public.wsUrl
+
 async function handleLogin() {
   authError.value = ''; authLoading.value = true;
   try {
-    const res = await apiFetch<any>(`${config.public.gatewayUrl}/api/auth/login`, { method: 'POST', body: { email: authEmail.value, password: authPassword.value } })
+    const res = await apiFetch<any>(`${apiBaseUrl}/api/auth/login`, { method: 'POST', body: { email: authEmail.value, password: authPassword.value } })
     token.value = res.token; user.value = res.user;
     if (typeof localStorage !== 'undefined') { localStorage.setItem('token', res.token); localStorage.setItem('user', JSON.stringify(res.user)) }
   } catch (err: any) {
@@ -592,7 +606,7 @@ async function handleLogin() {
 async function handleRegister() {
   authError.value = ''; authLoading.value = true;
   try {
-    await apiFetch(`${config.public.gatewayUrl}/api/auth/register`, { method: 'POST', body: { email: authEmail.value, password: authPassword.value } })
+    await apiFetch(`${apiBaseUrl}/api/auth/register`, { method: 'POST', body: { email: authEmail.value, password: authPassword.value } })
     await handleLogin()
   } catch (err: any) {
     authError.value = err.data?.error || err.message
@@ -612,6 +626,8 @@ const chatOpen = ref(false)
 const chatInput = ref('')
 const isThinking = ref(false)
 const alwaysApprove = ref(false)
+
+
 const showAddVpsModal = ref(false)
 const addVpsName = ref('')
 const addVpsResult = ref<any>(null)
@@ -643,7 +659,7 @@ async function fetchProjects(serverId: number) {
   projectsLoading.value = true
   projectsError.value = ''
   try {
-    const res = await apiFetch<any[]>(`${config.public.gatewayUrl}/api/servers/${serverId}/projects`)
+    const res = await apiFetch<any[]>(`${apiBaseUrl}/api/servers/${serverId}/projects`)
     projects.value = Array.isArray(res) ? res : []
   } catch (err: any) {
     projectsError.value = err.message || 'Failed to load projects'
@@ -657,7 +673,7 @@ async function deployNewProject() {
   if (!selectedServer.value || !newProjectName.value.trim() || !newProjectYaml.value.trim()) return
   deployingProject.value = true
   try {
-    const res = await apiFetch<any>(`${config.public.gatewayUrl}/api/servers/${selectedServer.value.id}/projects`, {
+    const res = await apiFetch<any>(`${apiBaseUrl}/api/servers/${selectedServer.value.id}/projects`, {
       method: 'POST',
       body: { project_name: newProjectName.value.trim(), compose_yaml: newProjectYaml.value }
     })
@@ -680,7 +696,7 @@ async function triggerProjectAction(project: any, action: 'start' | 'stop' | 're
     showLogsDrawer.value = true
     logsLoading.value = true
     try {
-      const res = await apiFetch<any>(`${config.public.gatewayUrl}/api/servers/${selectedServer.value.id}/projects/${project.id}/action`, {
+      const res = await apiFetch<any>(`${apiBaseUrl}/api/servers/${selectedServer.value.id}/projects/${project.id}/action`, {
         method: 'POST', body: { action: 'logs' }
       })
       logsContent.value = res.logs || '(no output)'
@@ -693,7 +709,7 @@ async function triggerProjectAction(project: any, action: 'start' | 'stop' | 're
   }
   projectActionLoading.value[project.id] = action
   try {
-    const res = await apiFetch<any>(`${config.public.gatewayUrl}/api/servers/${selectedServer.value.id}/projects/${project.id}/action`, {
+    const res = await apiFetch<any>(`${apiBaseUrl}/api/servers/${selectedServer.value.id}/projects/${project.id}/action`, {
       method: 'POST', body: { action }
     })
     const idx = projects.value.findIndex((p: any) => p.id === project.id)
@@ -710,7 +726,7 @@ async function deleteProject(project: any) {
   if (!confirm(`Delete project "${project.projectName}"? This will also run docker compose down.`)) return
   projectActionLoading.value[project.id] = 'delete'
   try {
-    await apiFetch(`${config.public.gatewayUrl}/api/servers/${selectedServer.value.id}/projects/${project.id}`, { method: 'DELETE' })
+    await apiFetch(`${apiBaseUrl}/api/servers/${selectedServer.value.id}/projects/${project.id}`, { method: 'DELETE' })
     projects.value = projects.value.filter((p: any) => p.id !== project.id)
   } catch (err: any) {
     alert(`❌ Delete failed: ${err.message}`)
@@ -782,7 +798,7 @@ function openAddVpsModal() {
 async function generateVpsToken() {
   addVpsLoading.value = true
   try {
-    const res = await apiFetch<any>(`${config.public.gatewayUrl}/api/servers/generate-token`, {
+    const res = await apiFetch<any>(`${apiBaseUrl}/api/servers/generate-token`, {
       method: 'POST',
       body: { name: addVpsName.value || undefined },
     })
@@ -805,7 +821,7 @@ async function runAdminAction(action: string) {
   let formattedTitle = action.replace('_', ' ').toUpperCase()
   
   try {
-    const res = await apiFetch<any>(`${config.public.gatewayUrl}/api/servers/${selectedServer.value.id}/admin-action`, {
+    const res = await apiFetch<any>(`${apiBaseUrl}/api/servers/${selectedServer.value.id}/admin-action`, {
       method: 'POST',
       body: { action }
     })
@@ -833,7 +849,7 @@ async function runAdminAction(action: string) {
 async function refreshMetrics() {
   if (!selectedServer.value) return
   try {
-    const res = await apiFetch<any>(`${config.public.gatewayUrl}/api/servers/${selectedServer.value.id}/metrics/latest`)
+    const res = await apiFetch<any>(`${apiBaseUrl}/api/servers/${selectedServer.value.id}/metrics/latest`)
     if (res && !res.error) {
       metrics.value = {
         cpu: res.cpu,
@@ -853,7 +869,7 @@ async function refreshMetrics() {
 async function fetchContainers() {
   if (!selectedServer.value) return
   try {
-    const res = await apiFetch<any[]>(`${config.public.gatewayUrl}/api/servers/${selectedServer.value.id}/containers`)
+    const res = await apiFetch<any[]>(`${apiBaseUrl}/api/servers/${selectedServer.value.id}/containers`)
     if (res && Array.isArray(res)) {
       containers.value = res.map((c: any) => ({
         id: c.id || c.ID,
@@ -879,7 +895,7 @@ async function sendChat() {
   await scrollChat()
 
   try {
-    const res = await apiFetch<any>(`${config.public.gatewayUrl}/api/chat`, {
+    const res = await apiFetch<any>(`${apiBaseUrl}/api/chat`, {
       method: 'POST',
       body: {
         message: msg,
@@ -927,7 +943,7 @@ async function respondApproval(approvalId: string, approve: boolean) {
   await scrollChat()
 
   try {
-    const res = await apiFetch<any>(`${config.public.gatewayUrl}/api/approvals/respond`, {
+    const res = await apiFetch<any>(`${apiBaseUrl}/api/approvals/respond`, {
       method: 'POST',
       body: { approval_id: approvalId, approve },
     })
@@ -953,7 +969,7 @@ async function scrollChat() {
 
 async function checkGateway() {
   try {
-    const res = await apiFetch<any>(`${config.public.gatewayUrl}/health`)
+    const res = await apiFetch<any>(`${apiBaseUrl}/health`)
     gatewayConnected.value = res.status === 'OK'
   } catch {
     gatewayConnected.value = false
@@ -962,7 +978,7 @@ async function checkGateway() {
 
 async function fetchServers() {
   try {
-    const res = await apiFetch<any[]>(`${config.public.gatewayUrl}/api/servers`)
+    const res = await apiFetch<any[]>(`${apiBaseUrl}/api/servers`)
     if (res && res.length > 0) {
       servers.value = res.map(s => ({
         id: s.id,
@@ -982,7 +998,7 @@ async function fetchServers() {
 
 async function fetchAuditLogs() {
   try {
-    const res = await apiFetch<any[]>(`${config.public.gatewayUrl}/api/audit-logs`)
+    const res = await apiFetch<any[]>(`${apiBaseUrl}/api/audit-logs`)
     if (res) {
       auditLogs.value = res.reverse().slice(0, 5) // Show top 5 latest
     }
@@ -993,7 +1009,7 @@ async function fetchAuditLogs() {
 
 async function toggleAlwaysApprove() {
   try {
-    await apiFetch(`${config.public.gatewayUrl}/api/session/settings`, {
+    await apiFetch(`${apiBaseUrl}/api/session/settings`, {
       method: 'POST',
       body: {
         session_id: sessionId.value,
@@ -1007,7 +1023,7 @@ async function toggleAlwaysApprove() {
 
 async function checkAlwaysApproveStatus() {
   try {
-    const res = await apiFetch<any>(`${config.public.gatewayUrl}/api/session/settings/${sessionId.value}`)
+    const res = await apiFetch<any>(`${apiBaseUrl}/api/session/settings/${sessionId.value}`)
     alwaysApprove.value = res.always_approve
   } catch (err) {
     console.error('Failed to fetch session settings', err)
@@ -1055,7 +1071,7 @@ async function initTerminal() {
 
   term.write('\r\n\x1b[35m⚡ PromptOps Terminal — Connecting...\x1b[0m\r\n')
 
-  const wsUrl = `${config.public.wsUrl.replace('http', 'ws')}/ws/client`
+  const wsUrl = `${wsBaseUrl}/ws/client`
   socket = new WebSocket(wsUrl)
 
   socket.onopen = () => {
